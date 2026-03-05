@@ -6,9 +6,88 @@ import { broadcast } from '@/lib/events';
 import { getProjectsPath, getMissionControlUrl } from '@/lib/config';
 import { getRelevantKnowledge, formatKnowledgeForDispatch } from '@/lib/learner';
 import { getTaskWorkflow } from '@/lib/workflow-engine';
-import type { Task, Agent, OpenClawSession, WorkflowStage } from '@/lib/types';
+import type { Task, Agent, OpenClawSession, WorkflowStage, TaskDeliverable } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * Build deployment config section with GitHub + Coolify credentials.
+ * Tokens come from MC env vars — never stored in DB.
+ */
+function buildDeploymentConfig(projectSlug: string): string {
+  const githubToken = process.env.GITHUB_TOKEN;
+  const coolifyToken = process.env.COOLIFY_API_TOKEN;
+  const githubOrg = process.env.GITHUB_ORG || 'mavanja';
+  const coolifyUrl = process.env.COOLIFY_URL || 'https://coolify.automation-studio.de';
+  const coolifyServerUuid = process.env.COOLIFY_SERVER_UUID || 'hc440o0kk8cg4oskoggsc4gc';
+  const coolifyProjectUuid = process.env.COOLIFY_PROJECT_UUID || 's4woogg8okg88okogc48c4w0';
+
+  if (!githubToken || !coolifyToken) return '';
+
+  const domain = `${projectSlug}.automation-studio.de`;
+
+  return `
+---
+**🚀 DEPLOYMENT CONFIG (vertraulich — nicht loggen!):**
+
+**GitHub:**
+- Token: ${githubToken}
+- Org: ${githubOrg}
+- Repo erstellen: \`curl -s -X POST https://api.github.com/user/repos -H "Authorization: token ${githubToken}" -H "Content-Type: application/json" -d '{"name":"${projectSlug}","private":true,"auto_init":false}'\`
+- Push: \`git remote add origin https://${githubOrg}:${githubToken}@github.com/${githubOrg}/${projectSlug}.git && git push -u origin main\`
+
+**Coolify:**
+- API: ${coolifyUrl}
+- Token: ${coolifyToken}
+- Server UUID: ${coolifyServerUuid}
+- Project UUID: ${coolifyProjectUuid}
+- Domain: ${domain}
+- App erstellen:
+\`\`\`bash
+curl -s -X POST "${coolifyUrl}/api/v1/applications/public" \\
+  -H "Authorization: Bearer ${coolifyToken}" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "server_uuid": "${coolifyServerUuid}",
+    "project_uuid": "${coolifyProjectUuid}",
+    "environment_name": "production",
+    "git_repository": "https://github.com/${githubOrg}/${projectSlug}",
+    "git_branch": "main",
+    "build_pack": "nixpacks",
+    "ports_exposes": "3000",
+    "domains": ["https://${domain}"],
+    "name": "${projectSlug}",
+    "git_commit_sha": "HEAD",
+    "instant_deploy": true
+  }'
+\`\`\`
+- Deploy starten: \`curl -s -H "Authorization: Bearer ${coolifyToken}" "${coolifyUrl}/api/v1/deploy?uuid=APP_UUID"\`
+`;
+}
+
+/**
+ * Fetch deliverables for a task — used to give tester/reviewer context.
+ */
+function getTaskDeliverables(taskId: string): TaskDeliverable[] {
+  return queryAll<TaskDeliverable>(
+    'SELECT * FROM task_deliverables WHERE task_id = ? ORDER BY created_at ASC',
+    [taskId]
+  );
+}
+
+/**
+ * Format deliverables as markdown for the dispatch message.
+ */
+function formatDeliverablesSection(deliverables: TaskDeliverable[]): string {
+  if (deliverables.length === 0) return '';
+
+  const items = deliverables.map(d => {
+    const typeIcon = d.deliverable_type === 'url' ? '🌐' : d.deliverable_type === 'file' ? '📄' : '📦';
+    return `- ${typeIcon} **${d.title}**: ${d.path || d.description || '(kein Pfad)'}`;
+  }).join('\n');
+
+  return `\n---\n**📦 DELIVERABLES (vom Builder erstellt):**\n${items}\n`;
+}
 interface RouteParams {
   params: Promise<{ id: string }>;
 }
@@ -283,19 +362,34 @@ Reply with: \`VERIFY_PASS: [summary]\` or \`VERIFY_FAIL: [what failed]\``;
    Body: {"status": "${nextStatus}"}`;
     }
 
+    // Build deployment config for builder
+    const deploymentConfig = isBuilder ? buildDeploymentConfig(projectDir) : '';
+
+    // Fetch deliverables for tester/reviewer
+    let deliverablesSection = '';
+    if (isTester || isVerifier) {
+      const deliverables = getTaskDeliverables(task.id);
+      deliverablesSection = formatDeliverablesSection(deliverables);
+    }
+
     const roleLabel = currentStage?.label || 'Task';
-    const taskMessage = `${priorityEmoji} **${isBuilder ? 'NEW TASK ASSIGNED' : `${roleLabel.toUpperCase()} STAGE — ${task.title}`}**
+    const taskCore = `${priorityEmoji} **${isBuilder ? 'NEW TASK ASSIGNED' : `${roleLabel.toUpperCase()} STAGE — ${task.title}`}**
 
 **Title:** ${task.title}
 ${task.description ? `**Description:** ${task.description}\n` : ''}
 **Priority:** ${task.priority.toUpperCase()}
 ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
 **Task ID:** ${task.id}
+**Mission Control API:** ${missionControlUrl}
 ${planningSpecSection}${agentInstructionsSection}${knowledgeSection}
 ${isBuilder ? `**OUTPUT DIRECTORY:** ${taskProjectDir}\nCreate this directory and save all deliverables there.\n` : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n`}
-${completionInstructions}
+${deliverablesSection}${deploymentConfig}
+${completionInstructions}`;
 
-If you need help or clarification, ask the orchestrator.`;
+    // Prepend agent's soul_md for role context
+    const taskMessage = agent.soul_md
+      ? `${agent.soul_md}\n\n---\n\n${taskCore}`
+      : taskCore;
 
     // Send message to agent's session using chat.send
     try {
