@@ -39,6 +39,7 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
+COPY --from=builder /app/skills ./skills
 
 RUN mkdir -p /app/data /app/workspace/projects \
   && chown -R node:node /app

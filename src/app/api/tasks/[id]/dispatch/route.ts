@@ -6,6 +6,7 @@ import { broadcast } from '@/lib/events';
 import { getProjectsPath, getMissionControlUrl } from '@/lib/config';
 import { getRelevantKnowledge, formatKnowledgeForDispatch } from '@/lib/learner';
 import { getTaskWorkflow } from '@/lib/workflow-engine';
+import { getSkillsForRole } from '@/lib/skill-loader';
 
 import type { Task, Agent, OpenClawSession, WorkflowStage, TaskDeliverable } from '@/lib/types';
 
@@ -387,10 +388,23 @@ ${isBuilder ? `**OUTPUT DIRECTORY:** ${taskProjectDir}\nCreate this directory an
 ${deliverablesSection}${deploymentConfig}
 ${completionInstructions}`;
 
-    // Prepend agent's soul_md for role context
-    const taskMessage = agent.soul_md
-      ? `${agent.soul_md}\n\n---\n\n${taskCore}`
-      : taskCore;
+    // Load skills for the agent's current workflow role
+    let skillsSection = '';
+    if (isBuilder) {
+      skillsSection = getSkillsForRole('builder');
+    } else if (isTester) {
+      skillsSection = getSkillsForRole('tester');
+    } else if (isVerifier) {
+      skillsSection = getSkillsForRole('reviewer');
+    }
+
+    // Prepend agent's soul_md + skills for role context
+    const taskMessage = [
+      agent.soul_md || '',
+      skillsSection,
+      '\n---\n',
+      taskCore,
+    ].filter(Boolean).join('\n');
 
     // Send message to agent's session using chat.send
     try {
