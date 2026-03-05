@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { createHmac } from 'crypto';
 import { queryOne, queryAll, run } from '@/lib/db';
+import { handleStageTransition, drainQueue } from '@/lib/workflow-engine';
+import { broadcast } from '@/lib/events';
 import type { Task, Agent, OpenClawSession } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -80,12 +82,25 @@ export async function POST(request: NextRequest) {
       }
 
       // Only move to testing if not already in testing, review, or done
-      // (Don't overwrite user's approval or testing results)
       if (task.status !== 'testing' && task.status !== 'review' && task.status !== 'done') {
         run(
           'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
           ['testing', now, task.id]
         );
+
+        // Broadcast status change
+        const updatedTask = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [task.id]);
+        if (updatedTask) {
+          broadcast({ type: 'task_updated', payload: updatedTask });
+        }
+
+        // Trigger workflow handoff — assigns the tester agent and auto-dispatches
+        const stageResult = await handleStageTransition(task.id, 'testing', {
+          previousStatus: task.status,
+        });
+        if (stageResult.handedOff) {
+          console.log(`[Webhook] Workflow handoff: ${task.status} → testing → agent ${stageResult.newAgentName}`);
+        }
       }
 
       // Log completion
@@ -114,7 +129,7 @@ export async function POST(request: NextRequest) {
         success: true,
         task_id: task.id,
         new_status: 'testing',
-        message: 'Task moved to testing for automated verification'
+        message: 'Task moved to testing with workflow handoff'
       });
     }
 
@@ -164,12 +179,23 @@ export async function POST(request: NextRequest) {
       }
 
       // Only move to testing if not already in testing, review, or done
-      // (Don't overwrite user's approval or testing results)
       if (task.status !== 'testing' && task.status !== 'review' && task.status !== 'done') {
         run(
           'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
           ['testing', now, task.id]
         );
+
+        // Broadcast + workflow handoff
+        const updatedTask = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [task.id]);
+        if (updatedTask) {
+          broadcast({ type: 'task_updated', payload: updatedTask });
+        }
+        const stageResult = await handleStageTransition(task.id, 'testing', {
+          previousStatus: task.status,
+        });
+        if (stageResult.handedOff) {
+          console.log(`[Webhook] Workflow handoff: ${task.status} → testing → agent ${stageResult.newAgentName}`);
+        }
       }
 
       // Log completion with summary
@@ -198,7 +224,7 @@ export async function POST(request: NextRequest) {
         agent_id: session.agent_id,
         summary,
         new_status: 'testing',
-        message: 'Task moved to testing for automated verification'
+        message: 'Task moved to testing with workflow handoff'
       });
     }
 
