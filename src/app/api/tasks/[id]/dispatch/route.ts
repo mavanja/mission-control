@@ -6,6 +6,7 @@ import { broadcast } from '@/lib/events';
 import { getProjectsPath, getMissionControlUrl } from '@/lib/config';
 import { getRelevantKnowledge, formatKnowledgeForDispatch } from '@/lib/learner';
 import { getTaskWorkflow } from '@/lib/workflow-engine';
+import { getMessagesFromOpenClaw } from '@/lib/planning-utils';
 import type { Task, Agent, OpenClawSession, WorkflowStage, TaskDeliverable } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -182,10 +183,18 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const now = new Date().toISOString();
 
     // Update task_id on existing session so the poller can find it
+    // Also reset last_message_count to current Gateway count to skip old messages
     if (session) {
+      let currentMsgCount = session.last_message_count || 0;
+      try {
+        const existingMessages = await getMessagesFromOpenClaw(session.openclaw_session_id);
+        currentMsgCount = existingMessages.length;
+      } catch {
+        // Best effort
+      }
       run(
-        'UPDATE openclaw_sessions SET task_id = ?, updated_at = ? WHERE id = ?',
-        [id, now, session.id]
+        'UPDATE openclaw_sessions SET task_id = ?, last_message_count = ?, updated_at = ? WHERE id = ?',
+        [id, currentMsgCount, now, session.id]
       );
     }
 
@@ -193,11 +202,23 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       // Create session record
       const sessionId = uuidv4();
       const openclawSessionId = `mission-control-${agent.name.toLowerCase().replace(/\s+/g, '-')}`;
-      
+
+      // Get current message count from Gateway so poller skips old messages
+      let initialMessageCount = 0;
+      try {
+        const existingMessages = await getMessagesFromOpenClaw(openclawSessionId);
+        initialMessageCount = existingMessages.length;
+        if (initialMessageCount > 0) {
+          console.log(`[Dispatch] Session ${openclawSessionId} has ${initialMessageCount} existing messages — setting as baseline`);
+        }
+      } catch {
+        // Session may not exist yet in Gateway — that's fine
+      }
+
       run(
-        `INSERT INTO openclaw_sessions (id, agent_id, openclaw_session_id, channel, status, task_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [sessionId, agent.id, openclawSessionId, 'mission-control', 'active', id, now, now]
+        `INSERT INTO openclaw_sessions (id, agent_id, openclaw_session_id, channel, status, task_id, last_message_count, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [sessionId, agent.id, openclawSessionId, 'mission-control', 'active', id, initialMessageCount, now, now]
       );
 
       session = queryOne<OpenClawSession>(
