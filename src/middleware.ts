@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHmac, timingSafeEqual } from 'crypto';
 
 // Log warning at startup if auth is disabled
 const MC_API_TOKEN = process.env.MC_API_TOKEN;
@@ -14,11 +13,54 @@ if (!MC_UI_PASSWORD) {
 
 const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+  }
+  return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Compute HMAC-SHA256 using Web Crypto API (Edge Runtime compatible).
+ */
+async function hmacSha256(key: string, message: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(key),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(message));
+  return bytesToHex(new Uint8Array(signature));
+}
+
+/**
+ * Timing-safe comparison using Web Crypto API.
+ */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const encoder = new TextEncoder();
+  const aBuf = encoder.encode(a);
+  const bBuf = encoder.encode(b);
+  let result = 0;
+  for (let i = 0; i < aBuf.length; i++) {
+    result |= aBuf[i] ^ bBuf[i];
+  }
+  return result === 0;
+}
+
 /**
  * Validate the mc_session cookie.
  * Cookie format: `timestamp.hmac_sha256(timestamp, MC_UI_PASSWORD)`
  */
-function isValidSession(cookieValue: string, password: string): boolean {
+async function isValidSession(cookieValue: string, password: string): Promise<boolean> {
   const dotIndex = cookieValue.indexOf('.');
   if (dotIndex === -1) return false;
 
@@ -30,13 +72,8 @@ function isValidSession(cookieValue: string, password: string): boolean {
   if (isNaN(ts) || Date.now() - ts > SESSION_MAX_AGE_MS) return false;
 
   // Verify HMAC signature
-  const expectedSignature = createHmac('sha256', password).update(timestamp).digest('hex');
-
-  const sigBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expectedSignature);
-
-  if (sigBuffer.length !== expectedBuffer.length) return false;
-  return timingSafeEqual(sigBuffer, expectedBuffer);
+  const expectedSignature = await hmacSha256(password, timestamp);
+  return timingSafeEqual(signature, expectedSignature);
 }
 
 /**
@@ -78,7 +115,7 @@ if (DEMO_MODE) {
   console.log('[DEMO] Running in demo mode — all write operations are blocked');
 }
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // --- UI Auth: protect all non-API routes ---
@@ -88,7 +125,7 @@ export function middleware(request: NextRequest) {
       // Always allow /login page
       if (pathname !== '/login') {
         const sessionCookie = request.cookies.get('mc_session')?.value;
-        if (!sessionCookie || !isValidSession(sessionCookie, MC_UI_PASSWORD)) {
+        if (!sessionCookie || !(await isValidSession(sessionCookie, MC_UI_PASSWORD))) {
           const loginUrl = request.nextUrl.clone();
           loginUrl.pathname = '/login';
           return NextResponse.redirect(loginUrl);
@@ -98,7 +135,7 @@ export function middleware(request: NextRequest) {
       // If user is on /login but already has a valid session, redirect to dashboard
       if (pathname === '/login') {
         const sessionCookie = request.cookies.get('mc_session')?.value;
-        if (sessionCookie && isValidSession(sessionCookie, MC_UI_PASSWORD)) {
+        if (sessionCookie && (await isValidSession(sessionCookie, MC_UI_PASSWORD))) {
           const dashboardUrl = request.nextUrl.clone();
           dashboardUrl.pathname = '/';
           return NextResponse.redirect(dashboardUrl);
@@ -142,7 +179,7 @@ export function middleware(request: NextRequest) {
   // Allow requests with a valid UI session cookie (browser UI calling API)
   if (MC_UI_PASSWORD) {
     const sessionCookie = request.cookies.get('mc_session')?.value;
-    if (sessionCookie && isValidSession(sessionCookie, MC_UI_PASSWORD)) {
+    if (sessionCookie && (await isValidSession(sessionCookie, MC_UI_PASSWORD))) {
       return NextResponse.next();
     }
   }
