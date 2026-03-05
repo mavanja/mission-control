@@ -301,6 +301,9 @@ export interface CreateAgentRequest {
 
 export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {
   status?: AgentStatus;
+  source?: AgentSource;
+  gateway_agent_id?: string;
+  session_key_prefix?: string | null;
 }
 
 export interface CreateTaskRequest {
