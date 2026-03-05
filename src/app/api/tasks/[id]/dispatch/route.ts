@@ -22,10 +22,9 @@ function buildDeploymentConfig(projectSlug: string): string {
   const coolifyUrl = process.env.COOLIFY_URL || 'https://coolify.automation-studio.de';
   const coolifyServerUuid = process.env.COOLIFY_SERVER_UUID || 'hc440o0kk8cg4oskoggsc4gc';
   const coolifyProjectUuid = process.env.COOLIFY_PROJECT_UUID || 's4woogg8okg88okogc48c4w0';
+  const coolifyGithubAppUuid = process.env.COOLIFY_GITHUB_APP_UUID;
 
-  if (!githubToken || !coolifyToken) return '';
-
-  const domain = `${projectSlug}.automation-studio.de`;
+  if (!githubToken || !coolifyToken || !coolifyGithubAppUuid) return '';
 
   return `
 ---
@@ -37,31 +36,32 @@ function buildDeploymentConfig(projectSlug: string): string {
 - Repo erstellen: \`curl -s -X POST https://api.github.com/user/repos -H "Authorization: token ${githubToken}" -H "Content-Type: application/json" -d '{"name":"${projectSlug}","private":true,"auto_init":false}'\`
 - Push: \`git remote add origin https://${githubOrg}:${githubToken}@github.com/${githubOrg}/${projectSlug}.git && git push -u origin main\`
 
-**Coolify:**
+**Coolify (Private GitHub App Deploy):**
 - API: ${coolifyUrl}
 - Token: ${coolifyToken}
 - Server UUID: ${coolifyServerUuid}
 - Project UUID: ${coolifyProjectUuid}
-- Domain: ${domain}
+- GitHub App UUID: ${coolifyGithubAppUuid}
 - App erstellen:
 \`\`\`bash
-curl -s -X POST "${coolifyUrl}/api/v1/applications/public" \\
+curl -s -X POST "${coolifyUrl}/api/v1/applications/private-github-app" \\
   -H "Authorization: Bearer ${coolifyToken}" \\
   -H "Content-Type: application/json" \\
   -d '{
     "server_uuid": "${coolifyServerUuid}",
     "project_uuid": "${coolifyProjectUuid}",
     "environment_name": "production",
-    "git_repository": "https://github.com/${githubOrg}/${projectSlug}",
+    "github_app_uuid": "${coolifyGithubAppUuid}",
+    "git_repository": "${githubOrg}/${projectSlug}",
     "git_branch": "main",
     "build_pack": "nixpacks",
     "ports_exposes": "3000",
-    "domains": ["https://${domain}"],
     "name": "${projectSlug}",
     "git_commit_sha": "HEAD",
     "instant_deploy": true
   }'
 \`\`\`
+- Domain wird von Coolify automatisch generiert (Format: {uuid}.46.225.92.174.sslip.io)
 - Deploy starten: \`curl -s -H "Authorization: Bearer ${coolifyToken}" "${coolifyUrl}/api/v1/deploy?uuid=APP_UUID"\`
 `;
 }

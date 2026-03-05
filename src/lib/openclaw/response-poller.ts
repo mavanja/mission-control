@@ -216,7 +216,21 @@ async function pollActiveSessions(): Promise<void> {
         const messages = await getMessagesFromOpenClaw(session.openclaw_session_id);
         const currentCount = messages.length;
 
-        if (currentCount <= session.last_message_count) continue;
+        if (currentCount <= session.last_message_count) {
+          // Safety fallback: check last assistant message for missed completion markers.
+          // Handles edge cases where last_message_count was set too high (session reuse race condition).
+          if (currentCount > 0) {
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg.role === 'assistant') {
+              const completion = detectCompletion(lastMsg.content);
+              if (completion) {
+                console.log(`[Response Poller] Missed completion found in last message: ${completion.type} — "${completion.summary}"`);
+                await handleCompletion(session, completion.type, completion.summary);
+              }
+            }
+          }
+          continue;
+        }
 
         // New messages found
         const newMessages = messages.slice(session.last_message_count);
