@@ -13,7 +13,7 @@ import path from 'path';
 
 /** Map workflow roles to skill file names (without .md extension). */
 const ROLE_SKILLS: Record<string, string[]> = {
-  builder: ['frontend-design', 'frontend-patterns', 'interaction-design', 'heroui-react', 'tdd-workflow', 'coding-standards'],
+  builder: ['frontend-design', 'frontend-patterns', 'interaction-design', 'heroui-react', 'ui-ux-pro-max', 'tdd-workflow', 'coding-standards'],
   tester: ['verification-loop'],
   reviewer: ['security-review', 'coding-standards'],
   verifier: ['security-review', 'coding-standards'],
