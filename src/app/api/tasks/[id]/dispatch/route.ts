@@ -6,7 +6,7 @@ import { broadcast } from '@/lib/events';
 import { getProjectsPath, getMissionControlUrl } from '@/lib/config';
 import { getRelevantKnowledge, formatKnowledgeForDispatch } from '@/lib/learner';
 import { getTaskWorkflow } from '@/lib/workflow-engine';
-import { getMessagesFromOpenClaw } from '@/lib/planning-utils';
+
 import type { Task, Agent, OpenClawSession, WorkflowStage, TaskDeliverable } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -174,51 +174,31 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // Get or create OpenClaw session for this agent
-    let session = queryOne<OpenClawSession>(
+    const now = new Date().toISOString();
+
+    // Close any existing active sessions for this agent (each task gets a fresh session)
+    let session: OpenClawSession | undefined;
+    const existingSessions = queryAll<OpenClawSession>(
       'SELECT * FROM openclaw_sessions WHERE agent_id = ? AND status = ?',
       [agent.id, 'active']
     );
-
-    const now = new Date().toISOString();
-
-    // Update task_id on existing session so the poller can find it
-    // Also reset last_message_count to current Gateway count to skip old messages
-    if (session) {
-      let currentMsgCount = session.last_message_count || 0;
-      try {
-        const existingMessages = await getMessagesFromOpenClaw(session.openclaw_session_id);
-        currentMsgCount = existingMessages.length;
-      } catch {
-        // Best effort
-      }
+    for (const s of existingSessions) {
       run(
-        'UPDATE openclaw_sessions SET task_id = ?, last_message_count = ?, updated_at = ? WHERE id = ?',
-        [id, currentMsgCount, now, session.id]
+        'UPDATE openclaw_sessions SET status = ?, ended_at = ?, updated_at = ? WHERE id = ?',
+        ['completed', now, now, s.id]
       );
     }
 
     if (!session) {
-      // Create session record
+      // Create session record with task-specific session ID to avoid message accumulation
       const sessionId = uuidv4();
-      const openclawSessionId = `mission-control-${agent.name.toLowerCase().replace(/\s+/g, '-')}`;
-
-      // Get current message count from Gateway so poller skips old messages
-      let initialMessageCount = 0;
-      try {
-        const existingMessages = await getMessagesFromOpenClaw(openclawSessionId);
-        initialMessageCount = existingMessages.length;
-        if (initialMessageCount > 0) {
-          console.log(`[Dispatch] Session ${openclawSessionId} has ${initialMessageCount} existing messages — setting as baseline`);
-        }
-      } catch {
-        // Session may not exist yet in Gateway — that's fine
-      }
+      const taskSlug = id.split('-')[0]; // First segment of task UUID for brevity
+      const openclawSessionId = `mission-control-${agent.name.toLowerCase().replace(/\s+/g, '-')}-${taskSlug}`;
 
       run(
         `INSERT INTO openclaw_sessions (id, agent_id, openclaw_session_id, channel, status, task_id, last_message_count, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [sessionId, agent.id, openclawSessionId, 'mission-control', 'active', id, initialMessageCount, now, now]
+        [sessionId, agent.id, openclawSessionId, 'mission-control', 'active', id, 0, now, now]
       );
 
       session = queryOne<OpenClawSession>(
