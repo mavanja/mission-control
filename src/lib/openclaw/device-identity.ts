@@ -12,7 +12,11 @@ interface DeviceIdentity {
   privateKeyPem: string;
 }
 
-const IDENTITY_DIR = path.join(os.homedir(), '.mission-control', 'identity');
+// Use persistent data directory (next to DB) if DATABASE_PATH is set, otherwise fall back to home dir
+const DATA_DIR = process.env.DATABASE_PATH
+  ? path.dirname(process.env.DATABASE_PATH)
+  : path.join(os.homedir(), '.mission-control');
+const IDENTITY_DIR = path.join(DATA_DIR, 'identity');
 const IDENTITY_FILE = path.join(IDENTITY_DIR, 'device.json');
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
