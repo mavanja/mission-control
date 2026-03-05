@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createHmac, timingSafeEqual } from 'crypto';
 
 // Log warning at startup if auth is disabled
 const MC_API_TOKEN = process.env.MC_API_TOKEN;
@@ -6,25 +7,50 @@ if (!MC_API_TOKEN) {
   console.warn('[SECURITY WARNING] MC_API_TOKEN not set - API authentication is DISABLED (local dev mode)');
 }
 
+const MC_UI_PASSWORD = process.env.MC_UI_PASSWORD;
+if (!MC_UI_PASSWORD) {
+  console.warn('[SECURITY WARNING] MC_UI_PASSWORD not set - UI login is DISABLED');
+}
+
+const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/**
+ * Validate the mc_session cookie.
+ * Cookie format: `timestamp.hmac_sha256(timestamp, MC_UI_PASSWORD)`
+ */
+function isValidSession(cookieValue: string, password: string): boolean {
+  const dotIndex = cookieValue.indexOf('.');
+  if (dotIndex === -1) return false;
+
+  const timestamp = cookieValue.substring(0, dotIndex);
+  const signature = cookieValue.substring(dotIndex + 1);
+
+  // Check expiry
+  const ts = parseInt(timestamp, 10);
+  if (isNaN(ts) || Date.now() - ts > SESSION_MAX_AGE_MS) return false;
+
+  // Verify HMAC signature
+  const expectedSignature = createHmac('sha256', password).update(timestamp).digest('hex');
+
+  const sigBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+
+  if (sigBuffer.length !== expectedBuffer.length) return false;
+  return timingSafeEqual(sigBuffer, expectedBuffer);
+}
+
 /**
  * Check if a request originates from the same host (browser UI).
- * Same-origin browser requests include a Referer or Origin header
- * pointing to the MC server itself. Server-side render fetches
- * (Next.js RSC) come from the same process and have no Origin.
  */
 function isSameOriginRequest(request: NextRequest): boolean {
   const host = request.headers.get('host');
   if (!host) return false;
 
-  // Server-side fetches from Next.js (no origin/referer) — same process
   const origin = request.headers.get('origin');
   const referer = request.headers.get('referer');
 
-  // If neither origin nor referer is set, this is likely a server-side
-  // fetch or a direct curl. Require auth for these (external API calls).
   if (!origin && !referer) return false;
 
-  // Check if Origin matches the host
   if (origin) {
     try {
       const originUrl = new URL(origin);
@@ -34,7 +60,6 @@ function isSameOriginRequest(request: NextRequest): boolean {
     }
   }
 
-  // Check if Referer matches the host
   if (referer) {
     try {
       const refererUrl = new URL(referer);
@@ -56,14 +81,44 @@ if (DEMO_MODE) {
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Only protect /api/* routes
+  // --- UI Auth: protect all non-API routes ---
   if (!pathname.startsWith('/api/')) {
+    // If MC_UI_PASSWORD is not set, UI is open (dev mode)
+    if (MC_UI_PASSWORD) {
+      // Always allow /login page
+      if (pathname !== '/login') {
+        const sessionCookie = request.cookies.get('mc_session')?.value;
+        if (!sessionCookie || !isValidSession(sessionCookie, MC_UI_PASSWORD)) {
+          const loginUrl = request.nextUrl.clone();
+          loginUrl.pathname = '/login';
+          return NextResponse.redirect(loginUrl);
+        }
+      }
+
+      // If user is on /login but already has a valid session, redirect to dashboard
+      if (pathname === '/login') {
+        const sessionCookie = request.cookies.get('mc_session')?.value;
+        if (sessionCookie && isValidSession(sessionCookie, MC_UI_PASSWORD)) {
+          const dashboardUrl = request.nextUrl.clone();
+          dashboardUrl.pathname = '/';
+          return NextResponse.redirect(dashboardUrl);
+        }
+      }
+    }
+
     // Add demo mode header for UI detection
     if (DEMO_MODE) {
       const response = NextResponse.next();
       response.headers.set('X-Demo-Mode', 'true');
       return response;
     }
+    return NextResponse.next();
+  }
+
+  // --- API Auth: protect /api/* routes ---
+
+  // Always allow auth endpoints
+  if (pathname.startsWith('/api/auth/')) {
     return NextResponse.next();
   }
 
@@ -79,9 +134,17 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // If MC_API_TOKEN is not set, auth is disabled (dev mode)
+  // If MC_API_TOKEN is not set, API auth is disabled (dev mode)
   if (!MC_API_TOKEN) {
     return NextResponse.next();
+  }
+
+  // Allow requests with a valid UI session cookie (browser UI calling API)
+  if (MC_UI_PASSWORD) {
+    const sessionCookie = request.cookies.get('mc_session')?.value;
+    if (sessionCookie && isValidSession(sessionCookie, MC_UI_PASSWORD)) {
+      return NextResponse.next();
+    }
   }
 
   // Allow same-origin browser requests (UI fetching its own API)
@@ -95,12 +158,11 @@ export function middleware(request: NextRequest) {
     if (queryToken && queryToken === MC_API_TOKEN) {
       return NextResponse.next();
     }
-    // Fall through to header check below
   }
 
   // Check Authorization header for bearer token
   const authHeader = request.headers.get('authorization');
-  
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return NextResponse.json(
       { error: 'Unauthorized' },
@@ -108,8 +170,8 @@ export function middleware(request: NextRequest) {
     );
   }
 
-  const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-  
+  const token = authHeader.substring(7);
+
   if (token !== MC_API_TOKEN) {
     return NextResponse.json(
       { error: 'Unauthorized' },
@@ -121,5 +183,13 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: '/api/:path*',
+  matcher: [
+    /*
+     * Match all paths except:
+     * - _next/static (static files)
+     * - _next/image (image optimization)
+     * - favicon.ico / favicon.svg
+     */
+    '/((?!_next/static|_next/image|favicon\\.ico|favicon\\.svg).*)',
+  ],
 };
