@@ -203,6 +203,7 @@ export interface OpenClawSession {
   status: string;
   session_type: 'persistent' | 'subagent';
   task_id?: string;
+  last_message_count?: number;
   ended_at?: string;
   created_at: string;
   updated_at: string;

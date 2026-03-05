@@ -343,6 +343,10 @@ export class OpenClawClient extends EventEmitter {
                   this.connecting = null;
                   this.emit('connected');
                   console.log('[OpenClaw] Authenticated successfully');
+                  // Start background response poller
+                  import('./response-poller').then(({ startResponsePoller }) => {
+                    startResponsePoller();
+                  }).catch(err => console.error('[OpenClaw] Failed to start response poller:', err));
                   resolve();
                 },
                 reject: (error: Error) => {
@@ -518,6 +522,10 @@ export class OpenClawClient extends EventEmitter {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    // Stop background response poller
+    import('./response-poller').then(({ stopResponsePoller }) => {
+      stopResponsePoller();
+    }).catch(() => {});
     if (this.ws) {
       this.ws.onclose = null; // Prevent reconnect on intentional close
       this.ws.close();

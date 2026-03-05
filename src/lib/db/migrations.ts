@@ -621,6 +621,20 @@ const migrations: Migration[] = [
 
       console.log('[Migration 013] Fresh start complete');
     }
+  },
+  {
+    id: '014',
+    name: 'add_session_last_message_count',
+    up: (db) => {
+      console.log('[Migration 014] Adding last_message_count to openclaw_sessions...');
+
+      const sessionsInfo = db.prepare("PRAGMA table_info(openclaw_sessions)").all() as { name: string }[];
+
+      if (!sessionsInfo.some(col => col.name === 'last_message_count')) {
+        db.exec(`ALTER TABLE openclaw_sessions ADD COLUMN last_message_count INTEGER DEFAULT 0`);
+        console.log('[Migration 014] Added last_message_count to openclaw_sessions');
+      }
+    }
   }
 ];
 
