@@ -102,6 +102,14 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     const now = new Date().toISOString();
 
+    // Update task_id on existing session so the poller can find it
+    if (session) {
+      run(
+        'UPDATE openclaw_sessions SET task_id = ?, updated_at = ? WHERE id = ?',
+        [id, now, session.id]
+      );
+    }
+
     if (!session) {
       // Create session record
       const sessionId = uuidv4();
