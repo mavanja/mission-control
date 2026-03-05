@@ -286,10 +286,11 @@ export class OpenClawClient extends EventEmitter {
               const role = 'operator';
               const scopes = ['operator.admin'];
 
-              // Build device identity for the connect params
+              // Build device identity for the connect params (skip if OPENCLAW_SKIP_DEVICE_AUTH is set)
               const clientId = 'cli';
               let device: Record<string, unknown> | undefined;
-              if (this.deviceIdentity) {
+              const skipDeviceAuth = process.env.OPENCLAW_SKIP_DEVICE_AUTH === 'true';
+              if (this.deviceIdentity && !skipDeviceAuth) {
                 const payload = buildDeviceAuthPayload({
                   deviceId: this.deviceIdentity.deviceId,
                   clientId,
@@ -313,6 +314,8 @@ export class OpenClawClient extends EventEmitter {
                   hasSignature: !!signature,
                   nonce,
                 });
+              } else if (skipDeviceAuth) {
+                console.log('[OpenClaw] Device auth skipped (OPENCLAW_SKIP_DEVICE_AUTH=true)');
               }
 
               const response = {
