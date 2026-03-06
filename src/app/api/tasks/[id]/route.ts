@@ -380,6 +380,8 @@ export async function DELETE(
 
     // Delete or nullify related records first (foreign key constraints)
     // Note: task_activities and task_deliverables have ON DELETE CASCADE
+    run('DELETE FROM task_roles WHERE task_id = ?', [id]);
+    run('DELETE FROM knowledge_entries WHERE task_id = ?', [id]);
     run('DELETE FROM openclaw_sessions WHERE task_id = ?', [id]);
     run('DELETE FROM events WHERE task_id = ?', [id]);
     // Conversations reference tasks - nullify or delete
