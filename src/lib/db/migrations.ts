@@ -635,6 +635,20 @@ const migrations: Migration[] = [
         console.log('[Migration 014] Added last_message_count to openclaw_sessions');
       }
     }
+  },
+  {
+    id: '015',
+    name: 'add_skill_tags_column',
+    up: (db) => {
+      console.log('[Migration 015] Adding skill_tags column to tasks...');
+
+      const tasksInfo = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
+
+      if (!tasksInfo.some(col => col.name === 'skill_tags')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN skill_tags TEXT`);
+        console.log('[Migration 015] Added skill_tags to tasks');
+      }
+    }
   }
 ];
 

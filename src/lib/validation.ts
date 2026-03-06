@@ -36,6 +36,7 @@ export const CreateTaskSchema = z.object({
   business_id: z.string().optional(),
   workspace_id: z.string().optional(),
   due_date: z.string().optional().nullable(),
+  skill_tags: z.array(z.string()).optional(),
 });
 
 export const UpdateTaskSchema = z.object({
@@ -46,6 +47,7 @@ export const UpdateTaskSchema = z.object({
   assigned_agent_id: z.string().uuid().optional().nullable(),
   workflow_template_id: z.string().optional().nullable(),
   due_date: z.string().optional().nullable(),
+  skill_tags: z.array(z.string()).optional().nullable(),
   updated_by_agent_id: z.string().uuid().optional(),
 });
 

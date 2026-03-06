@@ -6,7 +6,7 @@ import { broadcast } from '@/lib/events';
 import { getProjectsPath, getMissionControlUrl } from '@/lib/config';
 import { getRelevantKnowledge, formatKnowledgeForDispatch } from '@/lib/learner';
 import { getTaskWorkflow } from '@/lib/workflow-engine';
-import { getSkillsForRole } from '@/lib/skill-loader';
+import { getSkillsForTask } from '@/lib/skill-loader';
 
 import type { Task, Agent, OpenClawSession, WorkflowStage, TaskDeliverable } from '@/lib/types';
 
@@ -105,7 +105,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const { id } = await params;
 
     // Get task with agent info
-    const task = queryOne<Task & { assigned_agent_name?: string; workspace_id: string }>(
+    const task = queryOne<Task & { assigned_agent_name?: string; workspace_id: string; skill_tags?: string }>(
       `SELECT t.*, a.name as assigned_agent_name, a.is_master
        FROM tasks t
        LEFT JOIN agents a ON t.assigned_agent_id = a.id
@@ -388,14 +388,15 @@ ${isBuilder ? `**OUTPUT DIRECTORY:** ${taskProjectDir}\nCreate this directory an
 ${deliverablesSection}${deploymentConfig}
 ${completionInstructions}`;
 
-    // Load skills for the agent's current workflow role
+    // Load skills for the agent's current workflow role + task-specific tags
+    const taskSkillTags: string[] = task.skill_tags ? JSON.parse(task.skill_tags) : [];
     let skillsSection = '';
     if (isBuilder) {
-      skillsSection = getSkillsForRole('builder');
+      skillsSection = getSkillsForTask('builder', taskSkillTags);
     } else if (isTester) {
-      skillsSection = getSkillsForRole('tester');
+      skillsSection = getSkillsForTask('tester', taskSkillTags);
     } else if (isVerifier) {
-      skillsSection = getSkillsForRole('reviewer');
+      skillsSection = getSkillsForTask('reviewer', taskSkillTags);
     }
 
     // Prepend agent's soul_md + skills for role context
