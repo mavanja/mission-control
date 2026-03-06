@@ -232,13 +232,143 @@ export const useAppStore = create<AppState>((set) => ({
 }));
 ```
 
+## Supabase Projekt-Setup (Automatisch)
+
+Wenn der Task ein Supabase-Backend braucht, erstelle das Projekt automatisch per Management API.
+Env-Var `$SUPABASE_ACCESS_TOKEN` ist gesetzt.
+
+### 1. Projekt erstellen
+
+```bash
+curl -s -X POST "https://api.supabase.com/v1/projects" \
+  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "PROJECT_NAME",
+    "organization_id": "lwlafcjzibqiroqexvhh",
+    "region": "eu-central-1",
+    "db_pass": "GENERATE_SECURE_PASSWORD",
+    "plan": "free"
+  }'
+```
+
+Speichere die `ref` aus der Response (= Projekt-ID).
+
+### 2. API Keys holen
+
+```bash
+curl -s "https://api.supabase.com/v1/projects/{ref}/api-keys" \
+  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"
+```
+
+Speichere `anon` key und `service_role` key.
+
+### 3. SQL Migrationen ausfuehren
+
+```bash
+# Pro Migration-Datei:
+curl -s -X POST "https://api.supabase.com/v1/projects/{ref}/database/query" \
+  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "CREATE TABLE ..."}'
+```
+
+### 4. .env schreiben
+
+```bash
+cat > .env << EOF
+EXPO_PUBLIC_SUPABASE_URL=https://{ref}.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY={anon_key}
+EOF
+```
+
+### 5. Verifizieren
+
+```bash
+curl -s -X POST "https://api.supabase.com/v1/projects/{ref}/database/query" \
+  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "SELECT table_name FROM information_schema.tables WHERE table_schema = '\''public'\''"}'
+```
+
+### 6. Deliverable registrieren
+
+Registriere das Supabase-Projekt als Deliverable in MC:
+```bash
+curl -s -X POST "$MISSION_CONTROL_URL/api/tasks/$TASK_ID/deliverables" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"supabase_project","url":"https://supabase.com/dashboard/project/{ref}","metadata":{"ref":"{ref}","org":"lwlafcjzibqiroqexvhh"}}'
+```
+
+## Integration Tests
+
+Fuer Supabase-abhaengige Apps schreibe Integration Tests mit dem Service Role Key:
+
+```typescript
+// tests/supabase.test.ts
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY! // Admin-Zugang fuer Tests
+);
+
+describe('Supabase Integration', () => {
+  const testEmail = `test-${Date.now()}@example.com`;
+  const testPassword = 'TestPass123!';
+
+  test('Sign up creates user + profile', async () => {
+    const { data, error } = await supabase.auth.admin.createUser({
+      email: testEmail,
+      password: testPassword,
+      email_confirm: true,
+      user_metadata: { display_name: 'Test User' }
+    });
+    expect(error).toBeNull();
+    expect(data.user).toBeDefined();
+
+    // Profile sollte per Trigger erstellt worden sein
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', data.user!.id)
+      .single();
+    expect(profile).toBeDefined();
+    expect(profile!.display_name).toBe('Test User');
+  });
+
+  afterAll(async () => {
+    // Cleanup: Test-User loeschen
+    const { data: users } = await supabase.auth.admin.listUsers();
+    for (const user of users.users) {
+      if (user.email?.startsWith('test-')) {
+        await supabase.auth.admin.deleteUser(user.id);
+      }
+    }
+  });
+});
+```
+
+Test-Framework Setup:
+```bash
+npm install -D vitest @supabase/supabase-js
+```
+
+```json
+// package.json scripts
+"test": "vitest run",
+"test:watch": "vitest"
+```
+
 ## Build & Test Checkliste
 
 Vor TASK_COMPLETE immer pruefen:
 
-1. `npx expo export --platform web` oder `npx expo start` — kein Crash
-2. `npx tsc --noEmit` — keine TypeScript Fehler
-3. NativeWind Styles rendern korrekt (nicht alles weiss/unsichtbar)
-4. Alle Imports aufloesbar (kein "Cannot find module")
-5. `global.css` wird in Root Layout importiert
-6. `nativewind-env.d.ts` existiert im Projekt-Root
+1. `npx tsc --noEmit` — keine TypeScript Fehler
+2. `npm run build` oder `npx expo export --platform web` — kein Crash
+3. `npm test` — Integration Tests bestehen
+4. Supabase-Tabellen existieren (SQL Query Verifizierung)
+5. Alle Imports aufloesbar (kein "Cannot find module")
+6. `global.css` wird in Root Layout importiert
+7. `nativewind-env.d.ts` existiert im Projekt-Root
+8. `.env` hat korrekte Supabase-Credentials
